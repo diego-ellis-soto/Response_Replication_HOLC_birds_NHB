@@ -17,7 +17,7 @@ We additionally provide reimplementations of temporal aggregation workflows and 
 
 [6] 06_GBIF_DB_hexbin_temp_trends_post_NHB_HOLC_MS.Rmd: Extends the HOLC–GBIF sampling density analysis beyond 2020 using cloud-hosted H3-hex indexed GBIF data to explore post-study temporal trends.
 
-## Reproducibility notes
+## Reproducibility notes 
 
 - R version and package versions are documented via `sessionInfo()` included at the end of each R Markdown/Quarto file in this repository.
 - Rendered `.html` and `.pdf` outputs containing these session details are also provided for transparency and archival reproducibility.
