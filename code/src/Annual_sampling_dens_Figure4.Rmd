@@ -1,0 +1,171 @@
+---
+title: "Annual sampling density Figure 4"
+author: "Diego Ellis Soto"
+date: "2026-01-14"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Creating annual sampling density plot
+
+```{r}
+require(tidyverse)
+# require(plyr)
+require(dplyr)
+require(sf)
+require(ggplot2)
+
+
+# redlining colors
+holc_pal <- c('#92BC6B' # green
+              , '#92C7C9' # blue
+              , '#E7DC6B' # yellow
+              , '#E47D67' # red
+              #, '#A9A9A9'
+) # dark gray)
+# 
+
+
+# holc_area <- suppressWarnings(sf::st_read('../../indir/holc_shp', quiet = TRUE) %>%
+#       sf::st_cast('POLYGON') %>% # IMPORTANT
+#       dplyr::filter(!sf::st_is_empty(.)) %>% 
+#       sf::st_make_valid(.) %>% 
+#       tibble::rowid_to_column() %>% 
+#       dplyr::mutate(  id = paste(state, city, holc_id, holc_grade, rowid, sep = '_')
+#                       , city_state = paste0(city, ', ', state)
+#                       , area_holc_km2 = as.double(sf::st_area(.) / 1e+6)) %>% 
+#       dplyr::select(id, state, city, holc_id, holc_grade, city_state, area_holc_km2) )
+# 
+#     holc_area <-  holc_area %>% dplyr::select(city, holc_grade, area_holc_km2) %>% dplyr::group_by(holc_grade) %>% dplyr::summarise(sum_area_holc_km2 = sum(area_holc_km2)) %>% dplyr::filter(holc_grade != 'E')  %>% as_tibble() %>% dplyr::select(-geometry)    
+    
+    holc_area = read.csv(
+      '../../indir/Biodiv_Greeness_Social/main_combined_2022-05-27.csv') |>
+  group_by(holc_grade) |>
+  dplyr::summarise(area_sum = sum(area_holc_km2)) %>% 
+  dplyr::filter(holc_grade != 'E')  %>%
+  as_tibble()
+    
+# setnames(holc_area, 'sum_area_holc_km2', 'area_sum')
+names(holc_area) <- c('holc_grade', 'area_sum')
+
+
+temporal_2000_2020 = read.table('../../indir/Biodiv_Greeness_Social/R1_biodiv_col_code_by_holc_id_2000_2020.csv', header= T,sep=',')
+names(temporal_2000_2020) <- c('Type', 'Sum', 'holc_polygon_id')
+temporal_2000_2020$holc_grade = substr(sub(".*?_", "", (sub("_.*?", "", sub("_.*?", "", temporal_2000_2020$holc_polygon_id))) ), 1,1) # 2 holc polygons need to be correctly labeled based on the previous regex. These are all HOLC B polygons
+temporal_2000_2020 = temporal_2000_2020 %>% filter(holc_grade  %in% c('A', 'B', 'C', 'D')) 
+# A few HOLC polygons do not contain any bird observations from 2000-2020 which makes total sense
+temporal_2000_2020 %>% dplyr::filter(Sum > 0) %>% summarise(length(unique(holc_polygon_id)))
+sum(temporal_2000_2020$Sum)  # Most of bird biodiversity data in these cities was collected from 2000-2020
+
+# Load 1933-2022 data
+temporal_trend = read.table('../../indir/Biodiv_Greeness_Social/R1_biodiv_trend_by_time_holc_id_1933_2022.csv', header= T,sep=',')
+sum(temporal_trend$N_samples)
+names(temporal_trend) <- c('Year','holc_grade', 'Sum')
+temporal_trend = temporal_trend %>% filter(holc_grade != 'E')
+
+sum(temporal_2000_2020$Sum,na.rm=T) / sum(temporal_trend$Sum,na.rm=T) # 77.8 % of biodiversity data collected in last 20 years ! 
+
+temporal_all_data <- temporal_trend %>%
+  group_by(holc_grade, Year) %>%
+  dplyr::summarise(
+    n_obs = sum(Sum, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+tmpppp = temporal_all_data %>% group_by(holc_grade, Year) # %>% mutate(cumsum = cumsum(n_obs))
+
+trend_A = tmpppp %>% filter(holc_grade == 'A') %>% 
+  dplyr::mutate(cumsum_n_obs = cumsum(n_obs)) %>% 
+  left_join(holc_area) %>% 
+  dplyr::mutate(sampling_density = cumsum_n_obs /area_sum )
+
+trend_B  = tmpppp %>% filter(holc_grade == 'B') %>% dplyr::mutate(cumsum_n_obs = cumsum(n_obs)) %>% left_join(holc_area) %>% mutate(sampling_density = cumsum_n_obs /area_sum )
+
+trend_C  = tmpppp %>% filter(holc_grade == 'C') %>% dplyr::mutate(cumsum_n_obs = cumsum(n_obs)) %>% left_join(holc_area) %>% mutate(sampling_density = cumsum_n_obs /area_sum )
+
+trend_D  = tmpppp %>% filter(holc_grade == 'D') %>% dplyr::mutate(cumsum_n_obs = cumsum(n_obs)) %>% left_join(holc_area) %>% mutate(sampling_density = cumsum_n_obs /area_sum )
+
+temporal_all_data = rbind(trend_A,trend_B,trend_C,trend_D)
+
+
+
+updated_figure_4 <- temporal_all_data %>% 
+  filter(Year >= 2000 & Year <= 2020) %>% 
+  ggplot(
+    aes(
+      x = Year,
+      y = sampling_density,
+      color = holc_grade,
+      group = holc_grade
+    )
+  ) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_color_manual(values = holc_pal) +
+  theme_bw(16) +
+  theme(legend.position = "none") +
+  ylab("Sampling density in 1 km²")+
+  coord_cartesian(ylim = c(0, 300)) + scale_y_continuous(breaks = seq(0, 300, by = 100))
+
+updated_figure_4
+
+ggsave('../../outdir/updated_figure_4.png'
+       , width = 4.42
+       , height = 5
+       , dpi = 600
+)
+
+```
+
+Recreating Figure 4 with HOLC area from originally deposited data (we note the replicator also uses both area estimates)
+
+
+```{r Run with area as deposited in initial analysis, echo=FALSE}
+
+# Recreating the original temporal model with non-agregated multiplication of data
+# 
+temporal_all_data_tmp =data.frame(temporal_all_data)
+temporal_all_data_tmp$Year <- as.integer(temporal_all_data_tmp$Year)
+# # summary(gam(sampling_density ~ Year * holc_grade, data = temporal_all_data_tmp))
+# 
+# # Do the same but for 2000-2020 onwards:
+require(mgcv)
+require(sjPlot)
+# summary(gam(sampling_density ~ Year * holc_grade, data = temporal_all_data_tmp[temporal_all_data_tmp$Year %in% c(2000:2020),]))
+# 
+# # model_sampling = glm((sampling_density) ~ Year * holc_grade, data = temporal_all_data_tmp[temporal_all_data_tmp$Year %in% c(2000:2020),])
+model_sampling = gam(sampling_density ~ Year * holc_grade, data = temporal_all_data_tmp[temporal_all_data_tmp$Year %in% c(2000:2020),])
+# model_sampling |> tab_model( show.aic = TRUE)
+# 
+# tab_model(model_sampling, auto.label = T)
+# 
+# tab_model(
+#   model_sampling,
+#   auto.label = TRUE,
+#   file = "../../outdir/Supplementary_Table_4_revised.html"
+# )
+# 
+# 
+model_sampling_log = gam((log(sampling_density)) ~ Year * holc_grade, data = temporal_all_data_tmp[temporal_all_data_tmp$Year %in% c(2000:2020),])
+# model_sampling_log |> tab_model( show.aic = TRUE)
+# tab_model(model_sampling_log, auto.label = T)
+# 
+tab_model(
+  model_sampling_log,
+  model_sampling,
+  show.aic = TRUE,
+  dv.labels = c(
+    "Annual log sampling density<br>",
+    "Annual sampling density"
+  )
+)
+
+sessionInfo()
+
+```

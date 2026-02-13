@@ -1,0 +1,388 @@
+---
+title: "Figure_4_dplyr_based_cum_sum"
+author: "Diego Ellis Soto"
+date: "2026-01-17"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+embed-resources: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(readr)
+library(ggplot2)
+require(sf)
+require(mgcv)
+require(sjPlot)
+```
+
+### Code to calculative cumulative sampling density in a dplyr-plyr free conflicting environment
+### We show how the cumulative sampling density is calculated in the same way as our originally deposited code and calculated Figure 4, but with dplyr only
+
+
+### Rationale for cumulative sampling density and validation checks
+
+The purpose of this script is to **explicitly reconstruct Figure 4 from Ellis-Soto et al. (2023)** using a *dplyr-only workflow*, while making all aggregation steps transparent and verifiable. This addresses concerns raised in subsequent replication efforts regarding unintended data aggregation or multiplication.
+
+We intentionally use **cumulative sampling density** to visualize how *biodiversity knowledge accumulates through time*.
+
+Cumulative metrics can represent knowledge growth and information accumulation, particularly when raw observations are sparse in early years and increase rapidly following technological or social shifts (e.g. the expansion of eBird and smartphone-based biodiversity data collection after ~2010).
+
+### Annual vs cumulative metrics
+
+To avoid ambiguity, this script also computes **annual observation counts (`n_obs`)** alongside our originally published cumulative totals (`cumsum_n_obs`). Annual counts represent the true number of observations recorded in each year, whereas cumulative counts intentionally re-count prior years by design.
+
+As a result:
+- The *sum of annual counts* equals the total number of bird observations.
+- The *sum of cumulative counts across years* is necessarily larger (in our case the cumulative counts of 2020 equals the total number of bird observations)
+- This aggregation is **expected, intentional, and mathematically designed** when using cumulative sums.
+
+### Why these sanity checks?
+
+The checks reported below serve three purposes:
+
+1. **Prevent unintended data multiplication**  
+   We verify that there is exactly one row per `(Year × HOLC grade)` after aggregation.
+
+2. **Demonstrate numerical equivalence across representations**  
+   We confirm that:
+   - The final cumulative value per HOLC grade equals the sum of annual observations for that grade.
+   - The sum of final cumulative values across grades equals the total number of observations in the raw data.
+
+3. **Why cumulative sums appear “large”**  
+   We show that large cumulative totals arise solely from re-counting earlier years, not from duplicated records or join errors.  
+
+   **By definition, cumulative sampling density is non-decreasing through time**: once an observation has occurred, it remains part of the accumulated total in all subsequent years, so cumulative curves can increase or plateau, but they cannot decrease. **Consequently, summing cumulative values across years necessarily yields a number that is larger than the total number of unique observations**, because each observation is counted once for every year following its occurrence.
+
+This behavior is a mathematical property of cumulative sums and does not reflect additional data, replication, or aggregation error.
+   
+These checks ensure that the cumulative trends shown in Fig. 4 are a **faithful transformation of the underlying yearly data**, rather than an artefact of coding errors or implicit aggregation.
+
+### Scope and limitations
+
+We agree that cumulative, grade-level aggregation:
+- Does not capture polygon-level heterogeneity,
+- Does not model spatial or temporal non-independence
+
+For this reason, Fig. 4 is presented strictly as a **descriptive visualization of knowledge accumulation** and we made no claims about temporal patterns of polygon-level heterogeneity
+
+In summary, this code demonstrates that:
+- The cumulative sampling density shown in Fig. 4 is **intentional computed**,
+- The reported trends follow directly from the underlying annual data cummulative sum of sampling density as mentioned in our paper,
+
+
+```{r Cumulative sum dplyr framework}
+
+# “We intentionally used cumulative sampling density to visualize how knowledge accumulates over time; we agree that annual rates provide a complementary perspective and we now provide code for both.”
+# ---- Inputs ----
+
+# holc <- st_read('../../indir/holc_shp/holc_ad_data.shp') %>% 
+#   sf::st_cast('POLYGON') %>% # IMPORTANT
+#   dplyr::filter(!st_is_empty(.)) %>% 
+#   sf::st_make_valid(.) %>% 
+#   tibble::rowid_to_column() %>% 
+#   dplyr::mutate(  id = paste(state, city, holc_id, holc_grade, rowid, sep = '_')
+#                   , city_state = paste0(city, ', ', state)
+#                   , area_holc_km2 = as.double(st_area(.) / 1e+6)) %>% 
+#   dplyr::select(id, state, city, holc_id, holc_grade, city_state, area_holc_km2) 
+# 
+# # Calculate the area of holc polygons
+# holc_area <-  holc %>% dplyr::select(city, holc_grade, area_holc_km2) %>% dplyr::group_by(holc_grade) %>% dplyr::summarise(area_sum = sum(area_holc_km2)) %>% dplyr::filter(holc_grade != 'E')  %>% as_tibble() %>% dplyr::select(-geometry)
+
+    holc_area = read.csv(
+  '/Users/diegoellis/Desktop/Projects/Postdoc/Replic_HOLC_NHB/indir/Biodiv_Greeness_Social/main_combined_2022-05-27.csv') |>
+  group_by(holc_grade) |>
+  dplyr::summarise(area_sum = sum(area_holc_km2)) %>% 
+  dplyr::filter(holc_grade != 'E')  %>%
+  as_tibble()
+    
+    
+# ---- 1) Load the "trend" data (already Year, holc_grade, Sum) ----
+temporal_trend <- read_csv(
+   "../../indir/Biodiv_Greeness_Social/R1_biodiv_trend_by_time_holc_id_1933_2022.csv",
+  col_names = FALSE,
+  show_col_types = FALSE
+) |>
+  setNames(c("Year", "holc_grade", "Sum")) |>
+  mutate(
+    Year = as.integer(Year),
+    holc_grade = as.character(holc_grade),
+    Sum = as.numeric(Sum)
+  ) |>
+  filter(holc_grade %in% c("A","B","C","D"))
+
+
+sum(temporal_trend$Sum)
+
+# ---- 2) Annual aggregation (1 row per Year x grade) ----
+annual_by_grade_year <- temporal_trend %>%
+  dplyr::group_by(holc_grade, Year) %>%
+  dplyr::summarise(
+    n_obs = sum(Sum, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+annual_by_grade_year %>% head()
+names(annual_by_grade_year)
+nrow(annual_by_grade_year)
+sum(annual_by_grade_year$n_obs)
+
+
+# ---- 3) Join grade areas + compute cumulative totals + density ----
+temporal_all_data <- annual_by_grade_year |>
+  dplyr::arrange(holc_grade, Year) |>
+  dplyr::group_by(holc_grade) |>
+  dplyr::mutate(cumsum_n_obs = cumsum(n_obs)) |>
+  ungroup() |>
+  dplyr::left_join(holc_area |> 
+                     dplyr::select(holc_grade, area_sum), by = "holc_grade") |>
+  dplyr::mutate(sampling_density = cumsum_n_obs / area_sum)
+
+sum(temporal_all_data$cumsum_n_obs)
+sum(temporal_all_data$n_obs)
+# ---- 4) Sanity checks (these are the receipts) ----
+
+# A) Ensure exactly 1 row per Year x grade (no multiplication)
+dup_check <- temporal_all_data %>%
+  dplyr::count(holc_grade, Year) %>%
+  dplyr::summarise(max_n = max(n), .groups = "drop")
+print(dup_check)   # max_n should be 1
+
+# B) Annual totals should equal the raw totals
+raw_total <- temporal_trend %>% dplyr::summarise(raw_sum = sum(Sum, na.rm = TRUE)) %>% pull(raw_sum)
+annual_total <- temporal_all_data %>% dplyr::summarise(annual_sum = sum(n_obs)) %>% pull(annual_sum)
+cat("\nRaw total Sum =", raw_total, "\nAnnual aggregated total =", annual_total, "\n")
+
+# C) Final cumulative (end of series) should equal annual totals (within each grade)
+end_vs_sum <- temporal_all_data %>%
+  dplyr::group_by(holc_grade) %>%
+  dplyr::summarise(
+    sum_annual = sum(n_obs),
+    end_cum    = cumsum_n_obs[Year == max(Year)],
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(ok = (sum_annual == end_cum))
+print(end_vs_sum)
+
+# D) Demonstrate why "sum of cumulative" is huge BY DESIGN (not a bug)
+cum_sum_all_years <- temporal_all_data %>%
+  dplyr::summarise(sum_of_cumsums = sum(cumsum_n_obs)) %>%
+  pull(sum_of_cumsums)
+
+cat("\nNOTE:\n",
+    "Sum of annual counts (true records) =", annual_total, "\n",
+    "Sum of cumsum across years (intentionally large) =", cum_sum_all_years, "\n",
+    "This is large because cumulative sums re-count prior years on purpose.\n\n")
+
+# ---- 5) Plot your Fig 4 equivalent (2000-2020) ----
+
+holc_pal <- c('#92BC6B' # green
+              , '#92C7C9' # blue
+              , '#E7DC6B' # yellow
+              , '#E47D67' # red
+              
+)              
+
+p <- temporal_all_data %>%
+  filter(Year >= 2000, Year <= 2020) %>%
+  ggplot(aes(x = Year, y = sampling_density, color = holc_grade)) +
+  geom_line(linewidth = 1) +
+  scale_color_manual(values = holc_pal) +
+  theme_classic(base_size = 16) +
+  theme(legend.position = "none") +
+  ylab("Cumulative sampling density\n(bird observations per 1 km²)")
+
+print(p)
+
+ggplot2::ggsave('../../outdir/Fig_4_dplyr_based_cum_sum.png', p, width = 7, height = 7, dpi = 300)
+
+
+# Should be 1 row per (Year, holc_grade) if already aggregated
+temporal_trend %>%
+  dplyr::count(Year, holc_grade) %>%
+  dplyr::summarise(max_n = max(n), .groups="drop")
+
+
+ncol(temporal_trend)
+names(temporal_trend)
+
+temporal_trend %>% dplyr::summarise(
+  n_rows = n(),
+  n_years = n_distinct(Year),
+  n_grades = n_distinct(holc_grade)
+)
+
+
+temporal_trend %>% dplyr::summarise(
+  n_na_sum = sum(is.na(Sum)),
+  min_sum = min(Sum, na.rm=TRUE),
+  max_sum = max(Sum, na.rm=TRUE)
+)
+
+annual_by_grade_year %>% dplyr::count(holc_grade)      # should be ~#years per grade
+annual_by_grade_year %>% dplyr::count(Year)            # should be 4 per year (A–D) for most years
+
+# This is “sum of the final cumulative totals per grade” (i.e., total observations across all years, by grade, then summed).
+
+check_final_cum_sum <- temporal_all_data %>%
+  group_by(holc_grade) %>%
+  summarise(final_cum = max(cumsum_n_obs, na.rm = TRUE), .groups = "drop") %>%
+  summarise(sum_final_cum = sum(final_cum)) %>%
+  pull(sum_final_cum)
+
+check_final_cum_sum
+
+# Extra sanity (this should equal total annual counts across all grades/years):
+
+check_total_annual <- temporal_all_data %>% summarise(total = sum(n_obs, na.rm = TRUE)) %>% pull(total)
+
+c(final_cum_sum = check_final_cum_sum, total_annual = check_total_annual)
+
+
+# This is “sum of cumulative totals over the window 2000–2020, across grades”.
+check_sum_cumsums_2000_2020 <- temporal_all_data %>%
+  filter(Year >= 2000, Year <= 2020) %>%
+  summarise(sum_cumsums = sum(cumsum_n_obs, na.rm = TRUE)) %>%
+  pull(sum_cumsums)
+
+check_sum_cumsums_2000_2020
+
+
+
+check_sum_cumsums_2000_2020_by_grade <- temporal_all_data %>%
+  filter(Year >= 2000, Year <= 2020) %>%
+  group_by(holc_grade) %>%
+  summarise(sum_cumsums = sum(cumsum_n_obs, na.rm = TRUE), .groups = "drop")
+
+check_sum_cumsums_2000_2020_by_grade
+sum(check_sum_cumsums_2000_2020_by_grade$sum_cumsums)
+
+# That’s just “sum of cumsums across all years and grades” (the intentionally large number).
+
+check_sum_cumsums_all <- temporal_all_data %>%
+  summarise(sum_cumsums_all = sum(cumsum_n_obs, na.rm = TRUE)) %>%
+  pull(sum_cumsums_all)
+
+check_sum_cumsums_all
+
+temporal_all_data %>%
+  summarise(
+    sum_annual_counts = sum(n_obs, na.rm = TRUE),
+    sum_of_cumsums    = sum(cumsum_n_obs, na.rm = TRUE)
+  )
+
+
+summary(gam(sampling_density ~ Year * holc_grade, data = temporal_all_data[temporal_all_data$Year %in% c(2000:2020),]))
+
+# model_sampling = glm((sampling_density) ~ Year * holc_grade, data = temporal_all_data_tmp[temporal_all_data_tmp$Year %in% c(2000:2020),])
+model_sampling = gam(sampling_density ~ Year * holc_grade, data = temporal_all_data[temporal_all_data$Year %in% c(2000:2020),])
+# model_sampling |> tab_model( show.aic = TRUE,   dv.labels = "Cumulative sampling density"
+# )
+
+model_sampling_log = gam((log(sampling_density)) ~ Year * holc_grade, data = temporal_all_data[temporal_all_data$Year %in% c(2000:2020),])
+
+# model_sampling_log |> tab_model( show.aic = TRUE,   dv.labels = "Cumulative log sampling density")
+
+
+tab_model(
+  model_sampling_log,
+  model_sampling,
+  show.aic = TRUE,
+  dv.labels = c(
+    "Cumulative log sampling density<br>(original Suppl. Table 4)",
+    "Cumulative sampling density"
+  )
+)
+
+library(mgcv)
+library(dplyr)
+library(sjPlot)
+
+s <- summary(model_sampling_log)
+
+param_df <- as.data.frame(s$p.table) |>
+  tibble::rownames_to_column("Term") |>
+  rename(
+    Estimate  = Estimate,
+    `Std Error` = `Std. Error`,
+    `t-value` = `t value`,
+    `p-value` = `Pr(>|t|)`
+  ) |>
+  mutate(
+    Component = "A. parametric coefficients",
+    `p-value` = format.pval(`p-value`, digits = 4, eps = 1e-4)
+  ) |>
+  select(Component, Term, Estimate, `Std Error`, `t-value`, `p-value`)
+
+tab_df(param_df, show.rownames = FALSE)
+
+# Parametric table
+param_df <- as.data.frame(s$p.table) |>
+  tibble::rownames_to_column("Term") |>
+  rename(
+    Estimate   = Estimate,
+    `Std Error` = `Std. Error`,
+    `t-value`   = `t value`,
+    `p-value`   = `Pr(>|t|)`
+  ) |>
+  mutate(
+    Component = "A. parametric coefficients",
+    `p-value` = format.pval(`p-value`, digits = 4, eps = 1e-4)
+  ) |>
+  select(Component, Term, Estimate, `Std Error`, `t-value`, `p-value`)
+
+# Create model summary rows
+fit_rows <- tibble::tibble(
+  Component = "",
+  Term = c("Adjusted R-squared", "Deviance explained", "GCV", "Scale est", "N"),
+  Estimate = c(s$r.sq, s$dev.expl, s$sp.criterion, s$scale, s$n),
+  `Std Error` = NA,
+  `t-value` = NA,
+  `p-value` = NA
+)
+
+# Combine
+final_df <- dplyr::bind_rows(param_df, fit_rows)
+
+# Print
+sjPlot::tab_df(final_df, show.rownames = FALSE)
+
+
+library(dplyr)
+library(tibble)
+library(gt)
+
+s <- summary(model_sampling_log)
+
+param_df <- as.data.frame(s$p.table) |>
+  rownames_to_column("Term") |>
+  rename(
+    Estimate    = Estimate,
+    `Std.Error` = `Std. Error`,
+    `t.value`   = `t value`,
+    `p.value`   = `Pr(>|t|)`
+  ) |>
+  mutate(
+    Component = "A. parametric coefficients",
+    `p.value` = format.pval(`p.value`, digits = 4, eps = 1e-4),
+    Component = ifelse(duplicated(Component), "", Component)
+  ) |>
+  select(Component, Term, Estimate, `Std.Error`, `t.value`, `p.value`)
+
+stats_note <- sprintf(
+  "Adjusted R-squared: %.3f, Deviance explained: %.3f<br>GCV: %.4f, Scale est: %.5f, N: %d",
+  s$r.sq, s$dev.expl, s$sp.criterion, s$scale, s$n
+)
+
+param_df |>
+  gt() |>
+  tab_source_note(md(stats_note))
+
+
+sessionInfo()
+
+```

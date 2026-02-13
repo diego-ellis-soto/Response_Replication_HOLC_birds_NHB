@@ -1,0 +1,138 @@
+---
+title: "Suppl_Figure_2"
+author: "Diego Ellis Soto"
+date: "2026-01-25"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+### The aim of this script is to replicate Supplementary Figure 2 of Ellis-Soto et al. 2023 NHB
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+suppressPackageStartupMessages({
+require(sf)
+require(tidycensus)
+require(readr)
+require(dplyr)
+require(tidyr)
+require(patchwork)
+require(ggplot2)
+  
+  cm.cols1=function(x,bias=1) { colorRampPalette(c('grey90','steelblue4','steelblue1','gold','red1','red4'),bias=bias)(x)}
+
+# Color palette for redlining
+holc_pal <- c('#92BC6B' # green
+              , '#92C7C9' # blue
+              , '#E7DC6B' # yellow
+              , '#E47D67' # red
+)#, '#A9A9A9' # dark gray)
+
+  })
+```
+
+
+```{r Suppl. Figure 2 plot,  fig.width=6, fig.height=10, echo=TRUE}
+
+holc_area = read_csv('../../indir/Biodiv_Greeness_Social/main_combined_2022-05-27.csv')  %>%
+  dplyr::select(city, holc_grade, area_holc_km2) %>% 
+  dplyr::group_by(holc_grade) %>% 
+   dplyr::filter(holc_grade != 'E') %>%
+  dplyr::summarise(area_sum = sum(area_holc_km2)) 
+
+temporal_2000_2020 = read.table("../../indir/Biodiv_Greeness_Social//R1_biodiv_col_code_by_holc_id_2000_2020.csv", header= T,sep=',')
+names(temporal_2000_2020) <- c('Type', 'Sum', 'holc_polygon_id')
+temporal_2000_2020$holc_grade = substr(sub(".*?_", "", (sub("_.*?", "", sub("_.*?", "", temporal_2000_2020$holc_polygon_id))) ), 1,1) # 2 holc polygons need to be correctly labeled based on the previous regex. These are all HOLC B polygons
+# temporal_2000_2020[which(temporal_2000_2020$holc_grade =='2'),]$holc_grade <- 'B'
+temporal_2000_2020 = temporal_2000_2020 %>% filter(holc_grade  %in% c('A', 'B', 'C', 'D')) 
+
+# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# [10] Plot by observation type ####
+# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+
+ebird  = temporal_2000_2020 %>% filter(Type =='ebird')
+inat = temporal_2000_2020 %>% filter(Type =='iNaturalist')
+other = temporal_2000_2020 %>% filter(Type =='other')
+
+ebird_sampling_density <- plyr::ddply(ebird, 'holc_grade', function(x){
+  sampling_sum = sum(x$Sum)
+})
+ebird_sampling_density_df = left_join(ebird_sampling_density, holc_area)
+ebird_sampling_density_df$sampling_density <- ebird_sampling_density_df$V1 / ebird_sampling_density_df$area_sum
+ebird_sampling_density_df = ebird_sampling_density_df %>% filter(holc_grade != 'E')
+
+inat_sampling_density <- plyr::ddply(inat, 'holc_grade', function(x){
+  sampling_sum = sum(x$Sum)
+})
+inat_sampling_density_df = left_join(inat_sampling_density, holc_area)
+inat_sampling_density_df$sampling_density <- inat_sampling_density_df$V1 / inat_sampling_density_df$area_sum
+inat_sampling_density_df = inat_sampling_density_df %>% filter(holc_grade != 'E')
+
+other_sampling_density <- plyr::ddply(other, 'holc_grade', function(x){
+  sampling_sum = sum(x$Sum)
+})
+
+other_sampling_density_df = left_join(other_sampling_density, holc_area)
+other_sampling_density_df$sampling_density <- other_sampling_density_df$V1 / other_sampling_density_df$area_sum
+other_sampling_density_df = other_sampling_density_df %>% filter(holc_grade != 'E')
+
+inat_sampling_density_plot = inat_sampling_density_df %>%
+  ggplot(aes(holc_grade, sampling_density, fill = holc_grade)) +
+  geom_col() + 
+  scale_fill_manual(values = holc_pal) + 
+  theme_bw(16) + 
+  theme_classic(16) +
+  labs(title='iNaturalist') + 
+  theme(legend.position = 'none') + 
+  ylab('Sampling density in 1km^2') +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank()
+  )
+NULL
+
+other_sampling_density_plot = other_sampling_density_df %>%
+  ggplot(aes(holc_grade, sampling_density, fill = holc_grade)) +
+  geom_col() + 
+  scale_fill_manual(values = holc_pal) + 
+  theme_bw(16) + 
+  theme_classic(16) +
+  labs(title='Other') + 
+  theme(legend.position = 'none') + 
+  ylab('Sampling density in 1km^2') +
+  xlab('HOLC Grade') +
+  theme(
+    axis.title.y=element_blank(),
+  ) + 
+  NULL
+
+
+ebird_sampling_density_plot = ebird_sampling_density_df %>%
+  ggplot(aes(holc_grade, sampling_density, fill = holc_grade)) +
+  geom_col() + 
+  scale_fill_manual(values = holc_pal) + 
+  theme_bw(16) + 
+  theme_classic(16) +
+  labs(title='eBird') + 
+  theme(legend.position = 'none') + 
+  ylab('Sampling density in 1km^2') +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.title.y=element_blank(),
+  ) + 
+  NULL
+
+p =ebird_sampling_density_plot / inat_sampling_density_plot / other_sampling_density_plot
+p 
+
+ggsave("../../outdir/Suppl_Fig_2_sampling_density_by_type.png",
+       plot = p,
+       width = 6,
+       height = 9,
+       dpi = 600)
+
+sessionInfo()
+
+```

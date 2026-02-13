@@ -1,0 +1,210 @@
+---
+title: 'GBIF_DB post original study temporal: Filter redlining hexes to original paper
+  cities (HOLC + GBIF timeseries)'
+author: "Diego Ellis Soto"
+date: "2026-01-15"
+output:
+  pdf_document: default
+  html_document: default
+embed-resources: true
+---
+
+### Here we extend our original HOLC–GBIF sampling-density analysis, but beyond the time period of our original study. 
+
+It uses cloud-hosted, hex-indexed (H3) versions of GBIF and HOLC datasets to (i) subset HOLC hexes to the original study cities, (ii) join GBIF records to HOLC grades via shared H3 indices, (iii) estimate polygon area from the number of associated hex cells (resolution 10; ~0.015 km² per cell), and (iv) compute annual sampling density by HOLC grade for 2000–2023, including post-2020 exploratory summaries and plots.
+
+Next steps look at code: g1c
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(
+  echo = TRUE, message = FALSE, warning = FALSE
+)
+suppressPackageStartupMessages({
+library(dplyr)
+library(readr)
+library(duckdbfs)
+library(ggplot2)
+library(glue)
+})
+
+duckdb_secrets("", "", "s3-west.nrp-nautilus.io")
+
+# edit these filters as you like
+gbif <- open_dataset("s3://public-gbif/2025-06/hex") |>
+  filter(
+    `class` == "Aves",
+#    institutioncode %in% c("CLO", "iNaturalist")
+  )
+
+# -------------------------
+# 0) Cities used in original analysis (local)
+# -------------------------
+comp <- read_csv("../../indir/Biodiv_Greeness_Social/main_combined_2022-05-27.csv")
+
+cities_used <- comp %>%
+  distinct(city, state) %>%
+  mutate(city_state = paste(city, state, sep = ", "))
+
+
+# -------------------------
+# 2) Lazy Redlining table (DuckDB)
+# -------------------------
+redlining_lazy <- open_dataset("s3://public-redlining/hex") %>%
+  mutate(h10 = sql("('0x' || h10)::UBIGINT")) %>%   # your hotfix
+  # rename(holc_grade = grade) %>%
+  mutate(city_state = paste(city, state, sep = ", "))
+
+# -------------------------
+# 3) Filter redlining to ONLY your cities (no join, no copy_to)
+# -------------------------
+redlining <- redlining_lazy %>%
+  filter(city_state %in% cities_used$city_state)
+
+# -------------------------
+# 4) Areas (still lazy)
+# -------------------------
+hex_area <- redlining %>%
+  group_by(area_id) %>%
+  summarise(area = n() * 0.015047502, .groups = "drop")
+
+# -------------------------
+# 5) Join to GBIF (both lazy → no auto_copy)
+# -------------------------
+dt <- redlining %>%
+  left_join(gbif, by = c("h0", "h10"))
+
+
+trend = dt |>
+  dplyr::count(area_id, grade, year, institutioncode) |>
+  dplyr::inner_join(hex_area) |>
+  dplyr::mutate(count_density = n / area)
+
+
+# --- Areas ---
+grade_area <- redlining %>%
+  distinct(area_id, grade) %>%
+  left_join(hex_area, by = "area_id") %>%
+  group_by(grade) %>%
+  dplyr::summarise(total_area = sum(area), .groups = "drop")
+
+# --- Annual counts ---
+trend_year <- dt %>%
+  dplyr::filter(!is.na(year),
+         grade %in% c("A","B","C","D"),
+         year >= 2000, year <= 2023) %>%
+  dplyr::count(area_id, grade, year) %>%
+  group_by(grade, year) %>%
+  dplyr::summarise(total_n = sum(n), .groups = "drop") %>%
+  left_join(grade_area, by = "grade") %>%
+  dplyr::mutate(density = total_n / total_area)
+
+# --- Cumulative version (matches your 2nd plot concept) ---
+trend_cum <- trend_year %>%
+  dplyr::group_by(grade) %>%
+  dplyr::arrange(year) %>%
+  dplyr::mutate(density_cum = cumsum(total_n) / total_area) %>%
+  ungroup()
+
+# Colors (use yours)
+holc_cols <- c(
+  "A" = "#76b583",
+  "B" = "#6eb6c5",
+  "C" = "#ffe56d",
+  "D" = "#e07856"
+)
+
+holc_cols <- c(
+  "A" = "#76b583",
+  "B" = "#6eb6c5",
+  "C" = "#ffe56d",
+  "D" = "#e07856"
+)
+
+
+# p_annual <- ggplot(trend_year, aes(x = year, y = density, color = grade)) +
+#   geom_line(linewidth = 1) +
+#     geom_point(size = 2) +
+#   theme_bw() +
+#   coord_cartesian(xlim = c(2000, 2023)) +
+#   labs(
+#     x = "Year",
+#     y = "Sampling density (records per km²) — annual",
+#     color = "HOLC grade"
+#   ) +
+#   scale_colour_manual(values = holc_cols)+
+#     theme_bw(16)
+# # +  coord_cartesian(ylim = c(0, 300)) + scale_y_continuous(breaks = seq(0, 300, by = 100))
+
+# p_annual
+# 
+# ggsave('../../outdir/accu_time_post_2020_original_cities.png')
+
+
+trend_year_plot <- trend_year %>%
+  filter(year >= 2000, year <= 2023)
+
+# p_annual_v2 <- ggplot(trend_year_plot, aes(x = year, y = density, color = grade)) +
+#   geom_line(linewidth = 1) +
+#   geom_point(size = 2) +
+#   theme_bw(base_size = 16) +
+#   scale_colour_manual(values = holc_cols) +
+#   scale_x_continuous(limits = c(2000, 2023), breaks = seq(2000, 2023, 2)) +
+#   labs(
+#     x = "Year",
+#     y = "Sampling density (records per km²) — annual",
+#     color = "HOLC grade"
+#   )
+# 
+# p_annual_v2
+
+# ggsave('../../outdir/accu_time_post_2020_original_cities_until_2023.png')
+
+p_annual_v3 <- ggplot(trend_year_plot, aes(x = year, y = density, color = grade)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+
+  # vertical line at 2020
+  geom_vline(
+    xintercept = 2020,
+    linetype = "dashed",
+    linewidth = 0.8,
+    colour = "grey40"
+  ) +
+
+  # annotation
+  annotate(
+    "text",
+    x = 2019.8,
+    y = Inf,
+    # label = "Ellis-Soto et al. 2023\n(original study)",
+    label = "(original study)",
+    vjust = 1.5,
+    # hjust = -0.05, # right side
+       hjust = 1, # left side
+    size = 4,
+    colour = "grey30"
+  ) +
+
+  theme_bw(base_size = 16) +
+  scale_colour_manual(values = holc_cols) +
+  scale_x_continuous(
+    limits = c(2000, 2023),
+    breaks = seq(2000, 2023, 2)
+  ) +
+  labs(
+    x = "Year",
+    y = "Annual sampling density (records per km²)",
+    color = "HOLC grade"
+  ) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+p_annual_v3
+
+ggsave('../../outdir/accu_time_post_2020_original_cities_until_2023_vline.png')
+
+sessionInfo()
+
+
+
+```
+

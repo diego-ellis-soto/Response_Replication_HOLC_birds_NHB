@@ -1,0 +1,174 @@
+---
+title: 'calculate_ratio_2000_2020: Disparity A/D ratio change (2000–2020)'
+author: "Diego Ellis Soto"
+date: "2026-01-14"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Overview
+
+This document produces the calculation of the 2000–2020 A/D disparity using two parallel pipelines that yield the same percentage.
+
+(Ellis-Soto, Diego, Melissa Chapman, and Dexter H. Locke. "Historical redlining is associated with increasing geographical disparities in bird biodiversity sampling in the United States." Nature Human Behaviour 7.11 (2023): 1869-1877.)
+
+[1] Tidyverse style coding for our 2023 manuscript
+
+[2] A replicator-style implementation using data.table, closely matching the structure and objects used in the replication report.
+
+The goal is to make explicit how the A/D ratio is computed, and to clarify how a mixed-area expression could have arrised by the replicators (e.g. the 39.8%).
+
+# First pipeline (original 2023 manuscript implementation)
+
+This section reproduces the 2000–2020 A/D disparity using tidyverse code.
+
+Although the data manipulation steps differ (plyr/tidyverse vs. data.table),
+the final ratio is computed using the same definition:
+year-specific sampling density (n_obs / area_sum) yielding the same 39.5%.
+
+# Replicator-style calculation (data.table)
+
+Replicator-style calculation (data.table)
+
+This section reproduces the A/D percent-change calculation using the replication approach
+(data.table + HOLC-grade area totals) which yield 39.5%.
+
+We also proceed to print the mixed-area expression as text (not evaluated) to make transparent
+where the object ttb enters the ratio in the replication script (unintentionally?) which leads to a 39.8% estimate, as opposed to 39.5%.
+(e.g., “rep_SI_v5.R to L1413”),
+
+
+
+
+# Second pipeline (original 2023 manuscript implementation)
+
+This section reproduces the same 2000–2020 A/D disparity using the original analysis
+workflow from the 2023 manuscript.
+
+Although the data manipulation steps differ (plyr/tidyverse vs. data.table),
+the final ratio is computed using the same definition:
+year-specific sampling density (n_obs / area_sum).
+
+
+```{r tidyverse pipeline, echo=TRUE}
+
+suppressPackageStartupMessages({
+require(sf)
+require(readr)
+require(dplyr)
+require(tidyr)
+  })
+
+
+holc_area = read_csv('../../indir/Biodiv_Greeness_Social/main_combined_2022-05-27.csv')  %>%
+  dplyr::select(city, holc_grade, area_holc_km2) %>% 
+  dplyr::group_by(holc_grade) %>% 
+   dplyr::filter(holc_grade != 'E') %>%
+  dplyr::summarise(area_sum = sum(area_holc_km2)) 
+
+
+
+temporal_trend = read.table('../../indir/Biodiv_Greeness_Social/R1_biodiv_trend_by_time_holc_id_1933_2022.csv', header= T,sep=',')
+
+names(temporal_trend) <- c('Year','holc_grade', 'Sum')
+temporal_trend = temporal_trend %>% dplyr::filter(holc_grade != 'E')
+
+temporal_all_data <- temporal_trend %>%
+  group_by(holc_grade, Year) %>%
+  dplyr::summarise(
+    n_obs = sum(Sum, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+    dplyr::left_join(holc_area, by = "holc_grade") 
+
+# Nor rounding:
+ratios <- temporal_all_data %>%
+  dplyr::filter(holc_grade %in% c("A","D"), Year %in% c(2000, 2020)) %>%
+  dplyr::mutate(year_density = n_obs / area_sum) %>%
+  dplyr::select(Year, holc_grade, year_density) %>%
+  tidyr::pivot_wider(names_from = holc_grade, values_from = year_density) %>%
+  dplyr::filter(!is.na(A), !is.na(D)) %>%
+  dplyr::mutate(A_D_ratio = A / D) %>%
+  dplyr::select(Year, A_D_ratio)
+
+ratios %>%
+  tidyr::pivot_wider(names_from = Year, values_from = A_D_ratio,
+                     names_prefix = "ratio_") %>%
+  dplyr::mutate(
+    percent_change = round((ratio_2020 / ratio_2000 - 1) * 100, 1),
+    ratio_2000 = round(ratio_2000, 2),
+    ratio_2020 = round(ratio_2020, 2)
+  ) |>
+  dplyr::pull(percent_change)
+
+
+```
+
+Replicator data.table based disparity calculation. 
+
+We next reproduce the replication team’s data.table-based calculation of the A/D disparity. 
+The first `dispar_tta` object implements the correctly matched-area ratio and yields the same 39.5% estimate as the tidyverse pipeline above. 
+For transparency, we also print the replication script’s mixed-area ratio expression (not evaluated), in which the 2000 A-grade denominator is drawn from `ttb` while the D-grade denominator is drawn from `tta`. 
+Because `tta` and `ttb` use slightly different HOLC area normalizations, this produces an unintended hybrid (“mixed-area”) A/D ratio that slightly alters the percent-change estimate (39.8%).
+
+
+```{r replicator A/D 2000-2020 calculation, echo=TRUE}
+
+
+suppressPackageStartupMessages({
+library(data.table)
+library(here)
+  })
+
+
+holc_a <- fread("../../indir/Biodiv_Greeness_Social/soc_dem_max_2022_03_12 17_31_11.csv")
+holc_area_sum_a_dt <- holc_a[, .(sum_area_holc_km2 = sum(area_holc_km2)), by = holc_grade]
+
+t <- fread("../../indir/Biodiv_Greeness_Social/R1_biodiv_trend_by_time_holc_id_1933_2022.csv")
+setnames(t, c("year", "holc_grade", "Sum"))
+t <- t[holc_grade != "E"]
+
+tt <- t[, .(n_obs = sum(Sum)), by = .(year, holc_grade)]
+setorder(tt, holc_grade, year)
+
+tta <- merge(tt, holc_area_sum_a_dt, all.x = TRUE)
+tta[, sampling_density := n_obs/sum_area_holc_km2]
+
+tta[, holc_grade_D := factor(holc_grade, levels = c("D","B","C","A"))]
+
+dispar_tta <- round(
+(
+(tta[year == 2020 & holc_grade == "A", sampling_density] /
+tta[year == 2020 & holc_grade == "D", sampling_density]) /
+(tta[year == 2000 & holc_grade == "A", sampling_density] /
+tta[year == 2000 & holc_grade == "D", sampling_density])
+- 1
+) * 100,
+1
+)
+dispar_tta
+
+
+cat(
+  "Mixed-area A/D disparity (2000–2020):\n",
+  "round((((",
+  "tta[year %in% c(2020) & holc_grade %in% c('A'), sampling_density] / ",
+  "tta[year %in% c(2020) & holc_grade %in% c('D'), sampling_density]) / ",
+  "(ttb[year %in% c(2000) & holc_grade %in% c('A'), sampling_density] / ",
+  "tta[year %in% c(2000) & holc_grade %in% c('D'), sampling_density])",
+  ") - 1) * 100, 1\n",
+  sep = ""
+)
+
+sessionInfo()
+
+```
+
+### This reproduces the replication script’s mixed-area ratio (tta vs ttb).
+### Using different area denominators across years creates an unintended hybrid ratio,
+### which slightly alters the percent-change estimate relative to the matched-area calculation.

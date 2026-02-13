@@ -1,0 +1,256 @@
+---
+title: "Figure_1_Map_Replic_HOLC_NHB"
+format: html
+execute:
+  freeze: auto
+---
+
+```{r}
+
+library(sf)
+library(tidyverse)
+library(mapdata)
+library(ggthemes)
+library(ggspatial)
+library(usmap)
+library(dplyr)
+library(ggpubr)
+require(tidycensus)
+require(patchwork)
+
+# the link we used changed but we share this data, this is the updated one..https://dsl.richmond.edu/panorama/redlining/static/mappinginequality.json")
+
+gpkg_url <- "/vsicurl/https://dsl.richmond.edu/panorama/redlining/static/mappinginequality.json"
+
+holc_new <- st_read(
+  gpkg_url,
+  layer = "mappinginequality",
+  quiet = TRUE
+)  |>
+  dplyr::rename(holc_grade =grade) |>
+    dplyr::mutate(city_state = paste(city, state, sep = ", "))
+
+holc_new = holc_new |>
+  dplyr::mutate(valid =st_is_valid(holc_new)) %>%
+  dplyr::filter(valid=="TRUE") %>%
+  dplyr::filter(!is.na(holc_grade) & holc_grade != 'E') %>%
+  sf::st_cast('POLYGON') %>% # IMPORTANT
+  dplyr::filter(!st_is_empty(.)) %>%
+  sf::st_make_valid(.) %>%
+  tibble::rowid_to_column()
+
+# date_stamp <- format(Sys.Date(), "%Y-%m-%d")
+
+# st_write(
+#   holc_new,
+#   paste0("../outdir/holc_new_", date_stamp, ".gpkg"),
+#   layer = "holc_new",
+#   delete_layer = TRUE
+# )
+
+# US <- st_read("../../indir/gadm40_USA_shp/") # Can also be red directly
+
+US <- st_read(
+  "/vsizip//vsicurl/https://geodata.ucdavis.edu/gadm/gadm4.0/shp/gadm40_USA_shp.zip",
+  layer = "gadm40_USA_1",
+  quiet = TRUE
+)
+
+US <- st_simplify(US, preserveTopology = TRUE, dTolerance = 1000) 
+
+US <- US %>% st_crop(xmin = -130, ymin = 22, xmax = -65, ymax = 55) 
+
+holc_pal <- c('#92BC6B' # green
+             , '#92C7C9' # blue
+             , '#E7DC6B' # yellow
+             , '#E47D67' # red
+             #, '#A9A9A9'
+             ) 
+
+# Keep only cities used in our analysis:
+comp = read.csv('../../indir/Biodiv_Greeness_Social/main_combined_2022-05-27.csv')
+# If city_state does not already exist, create it
+
+points <- holc_new %>%
+  inner_join(comp %>% distinct(city, state), by = c("city", "state")) %>%
+  st_centroid()
+
+sampling <- read_csv("../../indir/Biodiv_Greeness_Social/main_combined_2022-05-27.csv") %>%  
+select(city, holc_grade, records, area_holc_km2) %>%
+  group_by(city, holc_grade) %>%
+  summarise(area_holc_km2 = sum(area_holc_km2, na.rm = TRUE),
+            records = sum(records, na.rm = TRUE)) %>% ungroup() %>%
+  mutate(density = records/area_holc_km2)
+
+
+map_usa = ggplot() +
+  geom_sf(data = US,aes(geometry = geometry), lwd = 0.2) +
+  geom_sf(data = points, aes(geometry = geometry), color = '#92BC6B', size = 4, lwd = 0) +
+  geom_sf(data = points, aes(geometry = geometry),color = '#92C7C9', size = 3, lwd = 0) +
+  geom_sf(data = points, aes(geometry = geometry), color = '#E7DC6B', size = 2, lwd = 0) +
+  geom_sf(data = points, aes(geometry = geometry), color = '#E47D67', size = 1, lwd = 0) +
+  # geom_sf_label(data = points, aes(label = city), force = 100, nudge_x = -2, seed = 10) +
+  theme_minimal() +
+  coord_sf(crs = st_crs(2163), xlim = c(-2500000, 2500000), ylim = c(-2300000, 
+         730000))+ theme_minimal() +
+ #geom_polygon(color = "white") + 
+ # guides(fill=FALSE) + 
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  theme(
+        #panel.background = element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(colour = "black"),
+        panel.border = element_rect(colour = "black", fill=NA, size=1)
+  )
+map_usa
+# ggsave("../../outdir/map.png",height =4, width=7.5, dpi = 300)
+
+
+NH <- holc_new %>% filter(city == "New Haven")
+st_bbox(NH)
+
+NH_map <- holc_new %>% filter(city == "New Haven") %>% 
+  mutate(area = st_area(geometry)) %>%
+  st_crop(xmin = -73.3, ymin = 41.23109, xmax = -72.5, ymax = 41.37502) %>%
+  ggplot() + geom_sf(aes(fill = holc_grade), lwd = 0) + theme_minimal() +
+  theme(legend.position = "none",
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank()) +
+  scale_fill_manual(values= holc_pal) + #c("green4","dodgerblue3", "gold1", "firebrick4")) +
+  theme(plot.title = element_text(size = 12)) +
+  annotation_scale(style = "ticks", location = "bl", width_hint = 0.5, vjust = -10)
+
+NH_density <- sampling %>%
+  filter(city == "New Haven") %>%
+  ggplot() + geom_col(aes(x = fct_rev(holc_grade),y = density/1000, fill = holc_grade), width = 0.6) +
+ # coord_flip() + 
+  theme_classic() + 
+  scale_fill_manual(values=holc_pal) +
+  labs(y = "sampling density") + theme(legend.position = "none", axis.title.y = element_blank()) +
+  coord_flip() + labs(title = "")+
+  scale_y_continuous(breaks = c(0, 3, 6, 9))
+
+
+NH_map
+# ggsave("../../outdir/nh_map.pdf",height =2, width=1.3, dpi = 300)
+
+NH_density
+# ggsave("../../outdir/nh_dens.png",height =2, width=1.3, dpi = 300)
+
+LA <- holc_new %>% filter(city == "Los Angeles")
+st_bbox(LA)
+
+LA_map <- holc_new %>% filter(city == "Los Angeles") %>% 
+  mutate(area = st_area(geometry)) %>%
+  st_crop(xmin = -118.61036, ymin = 28, xmax = -118, ymax = 34.35388) %>%
+  ggplot() + geom_sf(aes(fill = holc_grade),  lwd = 0) + theme_minimal() +
+  theme(legend.position = "none",
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank()) +
+  scale_fill_manual(values=holc_pal) +
+  theme(plot.title = element_text(size = 12)) +
+  annotation_scale(style = "ticks", location = "bl", width_hint = 0.5, vjust = -10)
+
+LA_density <- sampling %>%
+  filter(city == "Los Angeles") %>%
+  ggplot() + geom_col(aes(x = fct_rev(holc_grade),y = density/1000, fill = holc_grade), lwd = 0, width = 0.6) +
+ # coord_flip() + 
+  theme_classic() + 
+  scale_fill_manual(values=holc_pal) +
+  labs(y = "sampling density") + theme(legend.position = "none", axis.title.y = element_blank()) +
+  coord_flip() +labs(title = "") 
+
+
+LA_map
+# ggsave("../../outdir/LA_map.png",height =2, width=1.3,dpi = 300)
+
+
+
+LA_density
+# ggsave("../../outdir/LA_density.png",height =2, width=1.3, dpi = 300)
+
+detroit_map <- holc_new %>% filter(city == "Detroit") %>% 
+  mutate(area = st_area(geometry)) %>%
+  ggplot() + geom_sf(aes(fill = holc_grade),  lwd = 0) + theme_minimal() +
+  theme(legend.position = "none",
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank()) +
+  scale_fill_manual(values=holc_pal) + theme(plot.title = element_text(size = 12)) +
+  annotation_scale(style = "ticks", location = "bl", width_hint = 0.5, vjust = -10)
+
+detroit_density <- sampling %>%
+  filter(city == "Detroit") %>%
+  ggplot() + geom_col(aes(x = fct_rev(holc_grade),y = density/1000, fill = holc_grade), lwd = 0, width = 0.6) +
+ # coord_flip() + 
+  theme_classic() + 
+  scale_fill_manual(values=holc_pal) +
+  labs(y = "sampling density") + theme(legend.position = "none", axis.title.y = element_blank()) +coord_flip() +
+  labs(title = "") +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75))
+
+detroit_map
+# ggsave("../../outdir/detroit_map.pdf",height =2, width=1.3, dpi = 300)
+
+
+detroit_density
+# ggsave("../../outdir/detroit_dens.png",height =2, width=1.3, dpi = 300)
+
+
+# NH_density <- NH_density +
+#   coord_fixed(ratio = 0.25)
+# 
+# LA_density <- LA_density +
+#   coord_fixed(ratio = 0.25)
+# 
+# detroit_density <- detroit_density +
+#   coord_fixed(ratio = 0.25)
+# NH_map <- NH_map +
+#   coord_equal() +
+#   theme(aspect.ratio = NULL)
+# 
+# LA_map <- LA_map +
+#   coord_equal() +
+#   theme(aspect.ratio = NULL)
+# 
+# detroit_map <- detroit_map +
+#   coord_equal() +
+#   theme(aspect.ratio = NULL)
+# 
+row_NH <- (NH_map | NH_density) + plot_layout(widths = c(1, 1))
+row_LA <- (LA_map | LA_density) + plot_layout(widths = c(1, 1))
+row_detroit <- (detroit_map | detroit_density) + plot_layout(widths = c(1, 1))
+
+
+NH_map | LA_map | detroit_map
+
+NH_density | LA_density | detroit_density
+
+# 
+# 
+# options(repr.plot.width = 14, repr.plot.height = 14)
+
+# Combine: USA map on top, then 3 rows beneath
+fig1 <- map_usa /
+  row_NH /
+  row_LA /
+  row_detroit +
+  plot_layout(heights = c(4, 1, 1, 1))
+
+fig1
+
+ggsave(
+  "../../outdir/Figure_1_Map_Replic_HOLC_NHB.png",
+  fig1,
+  width = 12,
+  height = 12,
+  dpi = 300
+)
+
+sessionInfo()
+
+```
